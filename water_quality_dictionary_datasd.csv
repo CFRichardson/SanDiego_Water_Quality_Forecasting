@@ -1,0 +1,11 @@
+﻿field,description,possible_values
+sample,Unique sample ID,
+station,Unique location ID where sample was collected. See station reference file for location,
+depth_m,Depth in meters,
+date_sample,Date sample was collected,
+time,Time sample was collected,
+project,Outfall region where sample was collected,PLOO (PL): Point Loma Ocean Outfall; SBOO: South Bay Ocean Outfall
+parameter,Factor being recorded,fluorometry; DENSITY; DO; ENTERO; FECAL; OG; PH; SALINITY; SUSO; TEMP; TOTAL; pct_light
+qualifier,Qualifier for value,"<, >, e, LA, ND, NS"
+value,Result value,
+units,Units of result value,%; C; CFU/100 ml; mg/L; pH; ppt; sigma-t; ug/L
