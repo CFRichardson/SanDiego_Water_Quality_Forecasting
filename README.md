@@ -1,4 +1,4 @@
-# SanDiego_Water_Quality_Forecasting
+# SanDiego Water Quality Forecasting
 ---------------------------
 
 This project is a part of the ADS-506 course in the Applied Data Science Program at the University of San Diego.
