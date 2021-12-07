@@ -1,0 +1,444 @@
+---
+title: "ADS 506 - Final Project MODELING"
+author: "Emanuel Lucban, Sean Torres, Christopher Richardson"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(caret)
+library(astsa)
+library(dplyr)
+library(neuralnet)
+library(forecast)
+library(DMwR)
+```
+
+
+# Loading Data
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+wq_df = read.csv('Data/water_quality_2011_2019_datasd.csv')
+# Combine Date/Time
+wq_df['datetime'] = as.POSIXct(paste(wq_df$date_sample, wq_df$time), format="%Y-%m-%d %H:%M:%S")
+head(wq_df)
+```
+
+## Data Dictionary
+```{r}
+wq_dict = read.csv('water_quality_dictionary_datasd.csv')
+wq_dict
+```
+
+__________
+
+## Kelp Stations and Parameters
+
+```{r}
+kelp_stations <- c("I19", "I24", "I25", "I26", "I32", "I39", "I40")
+
+parameters <- c("CHLOROPHYLL",
+                "DO",
+                "ENTERO",
+                "FECAL",
+                "PH",
+                "SALINITY",
+                "TEMP")
+```
+
+## Create time series data for each parameter, resampled to weekly observations, aggregated across all stations. 1 series per parameter
+
+```{r}
+# Function to create time series from dataframe
+create_ts <- function(parameter){
+  p_ts <- wq_df[wq_df$parameter == parameter, c("datetime", "value")]
+  p_ts_clean <- p_ts[!is.na(p_ts$datetime), ]
+  # Order by datetime then convert to date
+  p_ts_clean <- p_ts_clean[order(p_ts_clean$datetime), ]
+  p_ts_clean$datetime <- as.Date(p_ts_clean$datetime)
+  
+  # Resample to weekly values by aggregating by week and taking the mean
+  p_ts_rsmp <- p_ts_clean %>% 
+    mutate(week = cut.Date(datetime, breaks = "1 week", labels = FALSE)) %>% 
+    group_by(week) %>%
+    summarize(mean = mean(value, na.rm = TRUE))
+  
+  # set nan values to mean after resample
+  p_ts_rsmp$mean[is.na(p_ts_rsmp$mean)] = mean(p_ts_clean$value, na.rm = TRUE)
+  
+  ret_ts <- ts(p_ts_rsmp$mean, start=c(2011, 1), frequency=52)
+  tsplot(ret_ts, main = paste("Weekly Mean ", parameter))
+  
+  return (ret_ts)
+}
+```
+
+### CHLOROPHYLL
+```{r}
+par(mfrow=c(2, 1))
+ts.chlorophyll <- create_ts('CHLOROPHYLL')
+tsplot(diff(ts.chlorophyll), main = "CHLOROPHYLL differenced")
+```
+
+### Dissolved Oxygen
+```{r}
+par(mfrow=c(2, 1))
+ts.do <- create_ts('DO')
+tsplot(diff(ts.do), main = "DO differenced")
+```
+
+### Entero
+```{r}
+par(mfrow=c(2, 1))
+ts.entero <- create_ts('ENTERO')
+tsplot(diff(ts.entero), main = "ENTERO differenced")
+```
+
+### Fecal
+```{r}
+par(mfrow=c(2, 1))
+ts.fecal <- create_ts('FECAL')
+tsplot(diff(ts.fecal), main = "FECAL differenced")
+```
+
+### PH
+```{r}
+par(mfrow=c(2, 1))
+ts.ph <- create_ts('PH')
+tsplot(diff(ts.ph), main = "PH differenced")
+```
+
+### SALINITY
+```{r}
+par(mfrow=c(2, 1))
+ts.salinity <- create_ts('SALINITY')
+tsplot(diff(ts.salinity), main = "SALINITY differenced")
+```
+
+### TEMP
+```{r}
+par(mfrow=c(2, 1))
+ts.temp <- create_ts('TEMP')
+tsplot(diff(ts.temp), main = "TEMP differenced")
+```
+
+___________
+
+# ARIMA + ANN Model
+
+```{r}
+# GENERALIZED Function to train ARIMA + ANN model
+ARIMANN <- function(ts, forecast){
+  # Keep things consistent
+  set.seed(42)
+  ts.size <- length(diff(ts))
+  
+  arima.model <- arima(diff(ts), order=c(1,1,1))
+  arima.res <- arima.model$residuals
+
+  # NN Window is 52 + 1 for label
+  nn_train_set <- data.frame(matrix(ncol = 53, nrow = 0))
+
+  for (i in 1:(ts.size - 53)) {
+    nn_train_set <- rbind(nn_train_set, arima.res[i:(i+52)])
+  }
+
+  # Change label col name
+  colnames(nn_train_set)[53] <- "Y"
+
+  n <- names(nn_train_set)
+  # For some reason R's neuralnet library can't properly parse a formula, we have to explicitly create one
+  f <- as.formula(paste("Y ~", paste(n[!n %in% "Y"], collapse = " + ")))
+  nn.model <- neuralnet(f, data = nn_train_set, linear.output = TRUE, learningrate = 0.01, hidden = 5)
+  
+  # Check if forecast is blank
+  if (missing(forecast)){
+    # Return training ts
+    return (ts((diff(ts)[54:ts.size] - arima.res[54:ts.size]) + predict(nn.model, newdata = nn_train_set)))
+  } 
+  
+  # Get the last 52 residuals to start the rolling predictions
+  nn.pred <- tail(arima.res, 52)
+  # iterate to forecast horizon for NN prediction
+  for (h in 1:forecast){
+    pd.input <- data.frame(matrix(ncol = 52, nrow = 0))
+    pd.input <- rbind(pd.input, tail(nn.pred, 52))
+    colnames(pd.input) <- colnames(nn_train_set)[1:52]
+    
+    # append next prediction
+    nn.pred <- append(nn.pred, predict(nn.model, newdata = pd.input))
+  }
+
+  pred.ts <- predict(arima.model, n.ahead=forecast)$pred + tail(nn.pred, forecast)
+  
+  return (pred.ts)
+}
+```
+
+__________
+
+## Modeling Chlorophyll
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+chlor.train <- window(ts.chlorophyll, 2011, c(2018, 52))
+chlor.results <- ARIMANN(chlor.train, 23)
+chlor.combined <- ts(c(diff(chlor.train), chlor.results), start=start(chlor.train), frequency = frequency(chlor.train))
+
+# Invert the differencing
+ts.plot(ts.chlorophyll, diffinv(chlor.combined, xi = ts.chlorophyll[1]), gpars = list(col = c("black", "red")), main = "Chlorophy Prediction")
+abline(v=as.Date("2019-01-01"))
+```
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(chlor.combined, xi = ts.chlorophyll[1]),23), diff(window(ts.chlorophyll, 2019)))
+```
+
+
+## Modeling Dissolved Oxygen
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+do.train <- window(ts.do, 2011, c(2018, 52))
+do.results <- ARIMANN(do.train, 23)
+do.combined <- ts(c(diff(do.train), do.results), start=start(do.train), frequency = frequency(do.train))
+ts.plot(ts.do, diffinv(do.combined, xi = ts.do[1]), gpars = list(col = c("black", "red")), main = "Disolved Oxygen Prediction")
+abline(v=as.Date("2019-01-01"), col = "blue")
+```
+
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(do.combined, xi = ts.do[1]),23), diff(window(ts.do, 2019)))
+```
+
+
+## Modeling Entero
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+entero.train <- window(ts.entero, 2011, c(2018, 52))
+entero.results <- ARIMANN(entero.train, 23)
+entero.combined <- ts(c(diff(entero.train), entero.results), start=start(entero.train), frequency = frequency(entero.train))
+
+ts.plot(window(ts.entero, 2011, c(2019, 23)), diffinv(entero.combined, xi = ts.entero[1]), gpars = list(col = c("black", "red")), main = "Entero Prediction")
+abline(v=as.Date("2019-01-01"), col = "blue")
+```
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(entero.combined, xi = ts.entero[1]),23), diff(window(ts.entero, 2019)))
+```
+
+
+## Modeling Fecal
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+fecal.train <- window(ts.fecal, 2011, c(2018, 52))
+fecal.results <- ARIMANN(fecal.train, 23)
+fecal.combined <- ts(c(diff(fecal.train), fecal.results), start=start(fecal.train), frequency = frequency(fecal.train))
+
+ts.plot(window(ts.fecal, 2011, c(2019, 23)), diffinv(fecal.combined, xi = ts.fecal[1]), gpars = list(col = c("black", "red")), main = "Fecal Prediction")
+abline(v=as.Date("2019-01-01"), col = "blue")
+```
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(fecal.combined, xi = ts.fecal[1]), 23), diff(window(ts.fecal, 2019)))
+```
+
+
+## Modeling PH
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+ph.train <- window(ts.ph, 2011, c(2018, 52))
+ph.results <- ARIMANN(ph.train, 23)
+ph.combined <- ts(c(diff(ph.train), ph.results), start=start(ph.train), frequency = frequency(ph.train))
+
+ts.plot(window(ts.ph, 2011, c(2019, 23)), diffinv(ph.combined, xi = ts.ph[1]), gpars = list(col = c("black", "red")), main = "PH Prediction")
+abline(v=as.Date("2019-01-01"), col = "blue")
+```
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(ph.combined, xi = ts.ph[1]), 23), diff(window(ts.ph, 2019)))
+```
+
+## Modeling Salinity
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+salinity.train <- window(ts.salinity, 2011, c(2018, 52))
+salinity.results <- ARIMANN(salinity.train, 23)
+salinity.combined <- ts(c(diff(salinity.train), salinity.results), start=start(salinity.train), frequency = frequency(salinity.train))
+
+ts.plot(window(ts.salinity, 2011, c(2019, 23)), diffinv(salinity.combined, xi = ts.salinity[1]), gpars = list(col = c("black", "red")), main = "Salinity Prediction")
+abline(v=as.Date("2019-01-01"), col = "blue")
+```
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(salinity.combined, xi = ts.salinity[1]), 23), diff(window(ts.salinity, 2019)))
+```
+
+
+## Modeling Temp
+
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+temp.train <- window(ts.temp, 2011, c(2018, 52))
+temp.results <- ARIMANN(temp.train, 23)
+temp.combined <- ts(c(diff(temp.train), temp.results), start=start(temp.train), frequency = frequency(temp.train))
+
+ts.plot(window(ts.temp, 2011, c(2019, 23)), diffinv(temp.combined, xi = ts.temp[1]), gpars = list(col = c("black", "red")), main = "Temp Prediction")
+abline(v=as.Date("2019-01-01"), col = "blue")
+```
+
+### RMSE
+```{r}
+RMSE(tail(diffinv(temp.combined, xi = ts.temp[1]), 23), diff(window(ts.temp, 2019)))
+```
+
+_______
+
+
+# ARIMA Models
+
+## Chlorophyll
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+chlor.arima <- auto.arima(window(ts.chlorophyll, 2011, c(2018, 52)))
+summary(chlor.arima)
+```
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.chlorophyll, 2011, c(2019, 23)))
+plot(forecast(chlor.arima, h = 23))
+```
+
+## RMSE
+```{r}
+RMSE(forecast(chlor.arima, h = 23)$mean, window(ts.chlorophyll, 2019))
+```
+
+
+## Disolved Oxygen
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+do.arima <- auto.arima(window(ts.do, 2011, c(2018, 52)))
+summary(do.arima)
+```
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.do, 2011, c(2019, 23)))
+plot(forecast(do.arima, h = 23))
+```
+## RMSE
+```{r}
+RMSE(forecast(do.arima, h = 23)$mean, window(ts.do, 2019))
+```
+
+
+## Entero
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+entero.arima <- auto.arima(window(ts.entero, 2011, c(2018, 52)))
+summary(entero.arima)
+```
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.entero, 2011, c(2019, 23)))
+plot(forecast(entero.arima, h = 23))
+```
+## RMSE
+```{r}
+RMSE(forecast(do.arima, h = 23)$mean, window(ts.entero, 2019))
+```
+
+## Fecal
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+fecal.arima <- auto.arima(window(ts.fecal, 2011, c(2018, 52)))
+summary(fecal.arima)
+```
+
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.fecal, 2011, c(2019, 23)))
+plot(forecast(fecal.arima, h = 23))
+```
+
+## RMSE
+```{r}
+RMSE(forecast(fecal.arima, h = 23)$mean, window(ts.fecal, 2019))
+```
+
+## PH
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+ph.arima <- auto.arima(window(ts.ph, 2011, c(2018, 52)))
+summary(ph.arima)
+```
+
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.ph, 2011, c(2019, 23)))
+plot(forecast(ph.arima, h = 23))
+```
+
+## RMSE
+```{r}
+RMSE(forecast(ph.arima, h = 23)$mean, window(ts.ph, 2019))
+```
+
+## Salinity
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+salinity.arima <- auto.arima(window(ts.salinity, 2011, c(2018, 52)))
+summary(salinity.arima)
+```
+
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.salinity, 2011, c(2019, 23)))
+plot(forecast(salinity.arima, h = 23))
+```
+
+## RMSE
+```{r}
+RMSE(forecast(ph.arima, h = 23)$mean, window(ts.ph, 2019))
+```
+
+
+
+## Temp
+```{r}
+# Only include data to 2018, reserve 2019 for validation
+temp.arima <- auto.arima(window(ts.temp, 2011, c(2018, 52)))
+summary(temp.arima)
+```
+
+```{r}
+par(mfrow = c(2,1))
+plot(window(ts.temp, 2011, c(2019, 23)))
+plot(forecast(temp.arima, h = 23))
+```
+
+## RMSE
+```{r}
+RMSE(forecast(temp.arima, h = 23)$mean, window(ts.temp, 2019))
+```
+
+
+
+
+
+

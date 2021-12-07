@@ -1,0 +1,132 @@
+---
+title: "ADS 506 - Final Project EDA"
+author: "Emanuel Lucban, Sean Torres, Christopher Richardson"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE}
+library(astsa)
+library(caret)
+library(corrplot)
+library(DataExplorer)
+library(DMwR)
+library(dplyr)
+library(ggplot2)
+library(forecast)
+library(neuralnet)
+library(tidyr)
+library(tidyverse)
+
+set.seed(1)
+```
+
+
+# Loading Data
+DF summary/information and dimensions 
+```{r Data Ingestion, message=FALSE, warning=FALSE}
+df <- read_csv('Data/water_quality_2011_2019_datasd.csv')
+summary(df)
+dim(df)
+```
+
+### Station Count
+```{r}
+length <- length(unique(df$station))
+line <- paste('There is a total of', length, 'stations!')
+cat(line,'\n\nHere are the stations from the dataset.')
+sort(unique(df$station))
+```
+
+### Parameter Count
+```{r}
+length <- length(unique(df$parameter))
+line <- paste('There is a total of', length, 'parameters!')
+cat(line,'\n\nHere are the parameters from the dataset.')
+sort(unique(df$parameter))
+```
+
+## Kelp Stations and Parameters
+```{r Subset Selection of needed info, message=FALSE, warning=FALSE}
+# We are only interested in kelp stations (total count = 7)
+kelp_stations <- c("I19", "I24", "I25", "I26", "I32", "I39", "I40")
+
+# Variables/Parameters utilized
+parameters <- c("CHLOROPHYLL",
+                "DO",
+                "ENTERO",
+                "FECAL",
+                "PH",
+                "SALINITY",
+                "TEMP")
+
+df <- df[df$parameter %in% parameters,]
+df <- df[df$station %in% kelp_stations,]
+```
+In total we only want the 7 kelp stations within the data set as well as the 7 types of measurements.
+
+![Map of interests](/Volumes/GoogleDrive/.shortcut-targets-by-id/10gLEFvU2gOB0VVXqsVWpYn06jvNYX4-8/Final Project 506/map.png)
+
+```{r Drop Unneeded columns, message=FALSE, warning=FALSE}
+# Remove individual Date & Time features + project since all buoys are related to SBOO
+columns2drop <- c('qualifier', 'project', 'sample', 'time')
+df <- drop_columns(df, columns2drop)
+head(df,3)
+```
+
+### Null Ratios by Station
+```{r Null Values x Station, message=FALSE, warning=FALSE}
+for (s in kelp_stations){
+  bouy <- df[df$station == s,]
+
+  plot_missing(bouy, title=paste('station', s))
+}
+
+```
+
+```{r Drop Null Rows, message=FALSE, warning=FALSE}
+# Removal of null values
+df <- df[!is.na(df$value),]
+
+# validation of dropping of NA rows
+for (s in kelp_stations){
+  bouy <- df[df$station == s,]
+
+  plot_missing(bouy, title=paste('station', s))
+}
+```
+
+## Date Sampling Deltas/Intervals for Disolved Oxygen
+Here we display the inconsistent sampling intervals which has led us into aggregating all stations as one, allowing for less likelihood of not having 4 samples per month.
+```{r Display inconsisten sampling intervals, message=FALSE, warning=FALSE}
+# create I19 & I25 independent DFs for delta manipulation
+I19 <- df %>%
+  arrange(date_sample) %>%
+  filter(station == "I19") %>%
+  filter(parameter == "DO") %>%
+  filter(date_sample >= "2011-01-01" & date_sample <= "2011-12-31") %>%
+  select(-units)
+
+I25 <- df %>%
+  arrange(date_sample) %>%
+  filter(station == "I25") %>%
+  filter(parameter == "DO") %>%
+  filter(date_sample >= "2011-01-01" & date_sample <= "2011-12-31") %>%
+  select(-units)
+
+I25_dates <- unique(I25$date_sample)
+cat('\n','-----I25 Date Deltas -----','\n')
+
+I25_sampling_deltas <- (I25_dates[2:length(I25_dates)] - I25_dates)
+I25_sampling_deltas[1:(length(I25_sampling_deltas)-1)]
+cat('\n\n')
+
+I19_dates <- unique(I19$date_sample)
+cat('\n','-----I19 Date Deltas -----','\n')
+I19_sampling_deltas <- (I19_dates[2:length(I19_dates)] - I19_dates)
+I19_sampling_deltas[1:(length(I19_sampling_deltas)-1)]
+```
+As we can see, DO for station I25 was sampled almost irregularly.  With sampling intervals ranging from the sampling the next day to almost 2 weeks out versus the sampling frequency for I19 of once per month at irregular intervals of every 4-7 weeks.
