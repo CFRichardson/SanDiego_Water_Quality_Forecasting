@@ -45,17 +45,17 @@ To clone this repository onto your device, use the commands below:
 ## Dependencies
 This repo utilizes the following packages:
 
-  * astsa_1.14.3     
-  * caret_6.0-88    
-  * corrplot_0.90    
+  * astsa 1.14.3     
+  * caret 6.0-88    
+  * corrplot 0.90    
   * DataExplorer 0.8.2
-  * DMwR_0.4.1
-  * dplyr_1.0.7      
-  * forecast_8.15  
-  * ggplot2_3.3.5  
-  * lattice_0.20-44  
-  * neuralnet_1.44.2
-  * tidyr_1.1.3     
+  * DMwR 0.4.1
+  * dplyr 1.0.7      
+  * forecast 8.15  
+  * ggplot2 3.3.5  
+  * lattice 0.20-44  
+  * neuralnet 1.44.2
+  * tidyr 1.1.3     
   * tidyverse 1.3.1
 
 ---------------------------
