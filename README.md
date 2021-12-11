@@ -24,7 +24,7 @@ This project is a part of the ADS-506 course in the Applied Data Science Program
 
 ---------------------------
 # Objective
-The goal of this particular study is to predict the status of kelp beds within a designated area and forecast if water quality parameters stay within EPA standards. The  approach taken is to apply the ARIMA’s residuals to a hybrid  back-propagation neural network model to tackle seasonality, heteroskedasticity, and non-Gaussian error that can occur in our data. By applying this model to the stated  dataset, the predictions should represent an accurate forecast pattern for the targeted parameters.
+The goal of this particular study is to predict the status of kelp beds within a designated area and forecast if water quality parameters stay within EPA standards. The  approach taken is to apply the ARIMA’s residuals to a back-propagation neural network model to tackle seasonality, heteroskedasticity, and non-Gaussian error that can occur in our data. By applying this model to the stated  dataset, the predictions should represent an accurate forecast pattern for the targeted parameters.
 
 
 ## Methods Utilized
